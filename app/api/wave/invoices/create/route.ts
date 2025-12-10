@@ -2,6 +2,12 @@ import { NextRequest, NextResponse } from 'next/server';
 import { BusinessKey, getBusinessIdFromKey } from '../../../../../lib/businessSelector';
 import { waveGraphQLFetch } from '../../../../../lib/waveClient';
 
+interface CreateInvoiceItemInput {
+  description?: string;
+  quantity?: number;
+  unitPrice: number;
+}
+
 interface CreateInvoiceRequestBody {
   businessKey?: BusinessKey;
   customerId?: string;
@@ -9,11 +15,7 @@ interface CreateInvoiceRequestBody {
   invoiceDate?: string;
   dueDate?: string;
   memo?: string;
-  items?: Array<{
-    description?: string;
-    quantity?: number;
-    unitPrice: number;
-  }>;
+  items?: CreateInvoiceItemInput[];
 }
 
 interface InvoiceCreateResult {
@@ -31,7 +33,7 @@ interface InvoiceCreateResult {
       invoiceDate: string | null;
       dueDate: string | null;
       viewUrl: string | null;
-      pdfUrl?: string | null;
+      pdfUrl: string | null;
       total: {
         value: number;
         currency: {
@@ -54,7 +56,7 @@ interface InvoiceCreateResult {
 }
 
 const CREATE_INVOICE_MUTATION = /* GraphQL */ `
-  mutation CreateInvoice($input: InvoiceCreateInput!) {
+  mutation InvoiceCreate($input: InvoiceCreateInput!) {
     invoiceCreate(input: $input) {
       didSucceed
       inputErrors {
@@ -106,19 +108,25 @@ function addDaysUtc(baseDate: string, days: number): string {
   return date.toISOString().slice(0, 10);
 }
 
+function computeDates(invoiceDate?: string, dueDate?: string) {
+  const resolvedInvoiceDate = invoiceDate ?? isoDateTodayUTC();
+  const resolvedDueDate = dueDate ?? addDaysUtc(resolvedInvoiceDate, 7);
+  return { invoiceDate: resolvedInvoiceDate, dueDate: resolvedDueDate };
+}
+
 function getGenericProductId(key: BusinessKey): string {
-  const envMap: Record<BusinessKey, string | undefined> = {
-    manna: process.env.WAVE_PRODUCT_ID_GENERIC_MANNA,
-    bako: process.env.WAVE_PRODUCT_ID_GENERIC_BAKO,
-    socialion: process.env.WAVE_PRODUCT_ID_GENERIC_SOCIALION,
-  };
+  const envName =
+    key === 'manna'
+      ? 'WAVE_PRODUCT_ID_GENERIC_MANNA'
+      : key === 'bako'
+      ? 'WAVE_PRODUCT_ID_GENERIC_BAKO'
+      : 'WAVE_PRODUCT_ID_GENERIC_SOCIALION';
 
-  const productId = envMap[key];
-  if (!productId) {
-    throw new Error(`Missing generic product ID for business ${key}`);
+  const value = process.env[envName];
+  if (!value) {
+    throw new Error(`${envName} is not set`);
   }
-
-  return productId;
+  return value;
 }
 
 function validateRequestBody(body: CreateInvoiceRequestBody): asserts body is Required<CreateInvoiceRequestBody> {
@@ -137,10 +145,10 @@ function validateRequestBody(body: CreateInvoiceRequestBody): asserts body is Re
   }
 
   for (const [index, item] of body.items.entries()) {
-    if (typeof item.unitPrice !== 'number' || Number.isNaN(item.unitPrice) || item.unitPrice <= 0) {
+    if (typeof item.unitPrice !== 'number' || !Number.isFinite(item.unitPrice) || item.unitPrice <= 0) {
       throw new Error(`Invalid unitPrice for item ${index}`);
     }
-    if (item.quantity !== undefined && (typeof item.quantity !== 'number' || item.quantity <= 0)) {
+    if (item.quantity !== undefined && (typeof item.quantity !== 'number' || !Number.isFinite(item.quantity) || item.quantity <= 0)) {
       throw new Error(`Invalid quantity for item ${index}`);
     }
   }
@@ -191,11 +199,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: message }, { status: 500 });
   }
 
-  const invoiceDate = body.invoiceDate ?? isoDateTodayUTC();
-  const dueDate = body.dueDate ?? addDaysUtc(invoiceDate, 7);
+  const { invoiceDate, dueDate } = computeDates(body.invoiceDate, body.dueDate);
   const currency = body.currency ?? 'USD';
 
-  const items = body.items.map((item) => ({
+  const waveItems = body.items.map((item) => ({
     productId,
     description: item.description ?? null,
     quantity: item.quantity ?? 1,
@@ -209,7 +216,7 @@ export async function POST(req: NextRequest) {
     currency,
     invoiceDate,
     dueDate,
-    items,
+    items: waveItems,
     memo: body.memo ?? null,
   };
 
@@ -218,13 +225,9 @@ export async function POST(req: NextRequest) {
     const result = data.invoiceCreate;
 
     if (!result.didSucceed || result.inputErrors.length > 0 || !result.invoice) {
-      const inputErrors = result.inputErrors.map((e) => e.message);
-      console.error('Wave invoiceCreate failed', inputErrors);
+      console.error('Wave invoiceCreate failed', result.inputErrors);
       return NextResponse.json(
-        {
-          error: 'Wave invoiceCreate failed',
-          inputErrors,
-        },
+        { error: 'Wave invoiceCreate failed', inputErrors: result.inputErrors },
         { status: 500 }
       );
     }
@@ -238,13 +241,15 @@ export async function POST(req: NextRequest) {
         invoiceId: invoice.id,
         invoiceNumber: invoice.invoiceNumber,
         status: invoice.status,
+        invoiceDate: invoice.invoiceDate,
+        dueDate: invoice.dueDate,
         total: invoice.total?.value ?? null,
         amountDue: invoice.amountDue?.value ?? null,
         currency: invoice.total?.currency?.code ?? null,
-        invoiceDate: invoice.invoiceDate,
-        dueDate: invoice.dueDate,
+        customerName: invoice.customer?.name ?? null,
+        customerEmail: invoice.customer?.email ?? null,
         viewUrl: invoice.viewUrl,
-        pdfUrl: invoice.pdfUrl ?? null,
+        pdfUrl: invoice.pdfUrl,
       },
       { status: 200 }
     );
