@@ -320,22 +320,22 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Invoice not found' }, { status: 404 });
     }
 
-    const mutationInput = {
-      businessId,
+       const mutationInput = {
+      // OJO: aquí ya no mandamos businessId, Wave debería inferirlo del invoice
       invoiceId: invoiceNode.id,
-      amount: {
-        amount: body.amount as number,
-        currency: invoiceNode.total?.currency?.code ?? 'USD',
-      },
+      // amount como Decimal (número simple)
+      amount: body.amount as number,
       paymentDate,
       paymentMethod,
-      notes: body.notes ?? undefined,
+      // si no hay notas, mejor no mandar el campo
+      ...(body.notes ? { notes: body.notes } : {}),
     };
 
     const mutationResult = await waveGraphQLFetch<AddPaymentMutationResult>(
       ADD_PAYMENT_MUTATION,
       { input: mutationInput }
     );
+
 
     const payload = mutationResult.invoicePaymentCreate;
 
