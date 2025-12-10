@@ -17,53 +17,63 @@ interface CreateInvoiceRequestBody {
   businessKey?: BusinessKey;
   customer?: CreateInvoiceCustomerInput;
   items?: CreateInvoiceItemInput[];
+  status?: 'DRAFT' | 'SENT';
   invoiceDate?: string;
-  dueDate?: string;
+  dueDate?: string | null;
   currencyCode?: string;
-  notes?: string;
+  memo?: string;
 }
 
-interface WaveInvoiceCreateResult {
+interface InvoiceCreateResult {
   invoiceCreate: {
     didSucceed: boolean;
     inputErrors: Array<{
+      code: string;
       message: string;
       path: string[];
-      code: string;
     }>;
     invoice: {
       id: string;
       invoiceNumber: string | null;
       status: string;
-      createdAt: string;
+      invoiceDate: string | null;
       dueDate: string | null;
-      total: { amount: number; currency: { code: string } | null } | null;
-      amountDue: { amount: number; currency: { code: string } | null } | null;
-      customer: { id: string | null; name: string | null; email: string | null } | null;
-      publicUrl: string | null;
+      viewUrl: string | null;
+      total: {
+        value: number;
+        currency: {
+          code: string;
+        } | null;
+      } | null;
+      amountDue: {
+        value: number;
+        currency: {
+          code: string;
+        } | null;
+      } | null;
+      customer: {
+        id: string;
+        name: string;
+        email: string | null;
+      } | null;
     } | null;
   };
 }
 
-interface CreatedInvoiceResponseBody {
+interface CreateInvoiceResponseBody {
   businessKey: BusinessKey;
   businessId: string;
-  invoice: {
-    id: string;
-    invoiceNumber: string | null;
-    status: string;
-    createdAt: string;
-    dueDate: string | null;
-    totalAmount: number;
-    totalCurrency: string;
-    amountDue: number;
-    customer: {
-      id: string | null;
-      name: string | null;
-      email: string | null;
-    };
-    publicUrl: string | null;
-  };
+  invoiceId: string;
+  invoiceNumber: string | null;
+  status: string;
+  invoiceDate: string | null;
+  dueDate: string | null;
+  total: number;
+  amountDue: number;
+  currency: string | null;
+  customerName: string | null;
+  customerEmail: string | null;
+  viewUrl: string | null;
 }
 
 const CREATE_INVOICE_MUTATION = /* GraphQL */ `
@@ -71,24 +81,25 @@ const CREATE_INVOICE_MUTATION = /* GraphQL */ `
     invoiceCreate(input: $input) {
       didSucceed
       inputErrors {
+        code
         message
         path
-        code
       }
       invoice {
         id
         invoiceNumber
         status
-        createdAt
+        invoiceDate
         dueDate
+        viewUrl
         total {
-          amount
+          value
           currency {
             code
           }
         }
         amountDue {
-          amount
+          value
           currency {
             code
           }
@@ -98,7 +109,6 @@ const CREATE_INVOICE_MUTATION = /* GraphQL */ `
           name
           email
         }
-        publicUrl
       }
     }
   }
@@ -113,7 +123,7 @@ function todayIsoDate(): string {
 }
 
 function addDays(baseDate: string, days: number): string {
-  const date = new Date(baseDate);
+  const date = new Date(`${baseDate}T00:00:00Z`);
   date.setUTCDate(date.getUTCDate() + days);
   return date.toISOString().slice(0, 10);
 }
@@ -126,26 +136,30 @@ function validateRequestBody(body: CreateInvoiceRequestBody): asserts body is Re
   const validKeys: BusinessKey[] = ['manna', 'bako', 'socialion'];
 
   if (!body.businessKey || !validKeys.includes(body.businessKey)) {
-    throw new Error('Invalid or missing businessKey');
+    throw new Error('Invalid businessKey');
   }
 
-  if (!body.customer || !body.customer.name?.trim()) {
-    throw new Error('Customer name is required');
+  if (!body.customer) {
+    throw new Error('Missing customer');
+  }
+
+  if (!body.customer.name?.trim()) {
+    throw new Error('Missing customer.name');
   }
 
   if (!Array.isArray(body.items) || body.items.length === 0) {
-    throw new Error('Invoice must have at least one item');
+    throw new Error('Missing or invalid items');
   }
 
   for (const item of body.items) {
     if (!item.description?.trim()) {
       throw new Error('Item description is required');
     }
-    if (item.quantity <= 0) {
-      throw new Error('Item quantity must be greater than zero');
+    if (typeof item.unitPrice !== 'number' || item.unitPrice <= 0) {
+      throw new Error('Item unitPrice must be greater than zero');
     }
-    if (item.unitPrice < 0) {
-      throw new Error('Item unitPrice cannot be negative');
+    if (typeof item.quantity !== 'number' || item.quantity <= 0) {
+      throw new Error('Item quantity must be greater than zero');
     }
   }
 }
@@ -179,19 +193,25 @@ export async function POST(req: NextRequest) {
   }
 
   const invoiceDate = body.invoiceDate ?? todayIsoDate();
-  const dueDate = body.dueDate ?? addDays(invoiceDate, 7);
+  const computedDueDate = body.dueDate === undefined ? addDays(invoiceDate, 7) : body.dueDate;
   const currencyCode = body.currencyCode ?? 'USD';
+  const status = body.status ?? 'DRAFT';
 
   let businessId: string;
   try {
     businessId = getBusinessIdFromKey(body.businessKey);
   } catch (error) {
-    console.error('Missing business ID environment variable', error);
-    return NextResponse.json({ error: 'Unexpected error while creating invoice in Wave' }, { status: 500 });
+    console.error('Invalid business key or missing business ID env var', error);
+    return NextResponse.json({ error: 'Invalid businessKey' }, { status: 400 });
   }
 
   const invoiceInput = {
     businessId,
+    status,
+    currency: currencyCode,
+    invoiceDate,
+    dueDate: computedDueDate ?? null,
+    memo: body.memo || undefined,
     customer: {
       name: body.customer.name,
       email: body.customer.email || undefined,
@@ -200,18 +220,16 @@ export async function POST(req: NextRequest) {
       description: item.description,
       quantity: item.quantity,
       unitPrice: {
-        amount: item.unitPrice,
-        currency: currencyCode,
+        value: item.unitPrice,
+        currency: {
+          code: currencyCode,
+        },
       },
     })),
-    currency: currencyCode,
-    invoiceDate,
-    dueDate,
-    memo: body.notes || undefined,
   };
 
   try {
-    const data = await waveGraphQLFetch<WaveInvoiceCreateResult>(CREATE_INVOICE_MUTATION, {
+    const data = await waveGraphQLFetch<InvoiceCreateResult>(CREATE_INVOICE_MUTATION, {
       input: invoiceInput,
     });
 
@@ -219,44 +237,39 @@ export async function POST(req: NextRequest) {
 
     if (!result.didSucceed || result.inputErrors.length > 0 || !result.invoice) {
       const errors = result.inputErrors.map((e) => e.message);
-      console.error('Failed to create invoice in Wave', errors);
+      console.error('Wave invoiceCreate failed', errors);
       return NextResponse.json(
         {
-          error: 'Failed to create invoice in Wave',
-          details: errors,
+          error: 'Wave invoiceCreate failed',
+          inputErrors: errors,
         },
         { status: 400 }
       );
     }
 
     const invoice = result.invoice;
-
-    const responseBody: CreatedInvoiceResponseBody = {
+    const responseBody: CreateInvoiceResponseBody = {
       businessKey: body.businessKey,
       businessId,
-      invoice: {
-        id: invoice.id,
-        invoiceNumber: invoice.invoiceNumber ?? null,
-        status: invoice.status,
-        createdAt: invoice.createdAt,
-        dueDate: invoice.dueDate ?? null,
-        totalAmount: Number(invoice.total?.amount ?? 0),
-        totalCurrency: invoice.total?.currency?.code ?? currencyCode,
-        amountDue: Number(invoice.amountDue?.amount ?? 0),
-        customer: {
-          id: invoice.customer?.id ?? null,
-          name: invoice.customer?.name ?? null,
-          email: invoice.customer?.email ?? null,
-        },
-        publicUrl: invoice.publicUrl ?? null,
-      },
+      invoiceId: invoice.id,
+      invoiceNumber: invoice.invoiceNumber ?? null,
+      status: invoice.status,
+      invoiceDate: invoice.invoiceDate ?? null,
+      dueDate: invoice.dueDate ?? null,
+      total: invoice.total?.value ?? 0,
+      amountDue: invoice.amountDue?.value ?? 0,
+      currency: invoice.total?.currency?.code ?? null,
+      customerName: invoice.customer?.name ?? null,
+      customerEmail: invoice.customer?.email ?? null,
+      viewUrl: invoice.viewUrl ?? null,
     };
 
     return NextResponse.json(responseBody, { status: 200 });
   } catch (error) {
+    const message = error instanceof Error ? error.message : undefined;
     console.error('Unexpected error while creating invoice in Wave', error);
     return NextResponse.json(
-      { error: 'Unexpected error while creating invoice in Wave' },
+      { error: 'Unexpected error while creating invoice in Wave', details: message },
       { status: 500 }
     );
   }
