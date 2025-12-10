@@ -10,6 +10,7 @@ interface CreateProductRequestBody extends BaseProductRequestBody {
   name?: string;
   description?: string;
   unitPrice?: number;
+  // Opcionales a nivel app, pero NO se envían al input de Wave:
   isSold?: boolean;
   isBought?: boolean;
 }
@@ -95,8 +96,15 @@ export async function POST(req: NextRequest) {
   }
 
   if (typeof body.unitPrice !== 'undefined') {
-    if (typeof body.unitPrice !== 'number' || !Number.isFinite(body.unitPrice) || body.unitPrice < 0) {
-      return NextResponse.json({ error: 'unitPrice must be a non-negative number' }, { status: 400 });
+    if (
+      typeof body.unitPrice !== 'number' ||
+      !Number.isFinite(body.unitPrice) ||
+      body.unitPrice < 0
+    ) {
+      return NextResponse.json(
+        { error: 'unitPrice must be a non-negative number' },
+        { status: 400 }
+      );
     }
   }
 
@@ -108,20 +116,38 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Invalid businessKey' }, { status: 400 });
   }
 
-  const input = {
+  // 👇 IMPORTANTE: no incluimos isSold ni isBought en el input
+  const input: {
+    businessId: string;
+    name: string;
+    description?: string | null;
+    unitPrice?: number | null;
+  } = {
     businessId,
     name: body.name.trim(),
-    description: body.description ?? null,
-    isSold: body.isSold ?? true,
-    isBought: body.isBought ?? false,
-    unitPrice:
-      typeof body.unitPrice === 'number' && Number.isFinite(body.unitPrice)
-        ? body.unitPrice
-        : null,
   };
 
+  if (typeof body.description === 'string') {
+    input.description = body.description;
+  } else {
+    input.description = null;
+  }
+
+  if (
+    typeof body.unitPrice === 'number' &&
+    Number.isFinite(body.unitPrice) &&
+    body.unitPrice >= 0
+  ) {
+    input.unitPrice = body.unitPrice;
+  } else {
+    input.unitPrice = null;
+  }
+
   try {
-    const result = await waveGraphQLFetch<ProductCreateResult>(PRODUCT_CREATE_MUTATION, { input });
+    const result = await waveGraphQLFetch<ProductCreateResult>(PRODUCT_CREATE_MUTATION, {
+      input,
+    });
+
     const productCreate = result.productCreate;
     const inputErrors = productCreate?.inputErrors ?? [];
 
@@ -142,7 +168,7 @@ export async function POST(req: NextRequest) {
       product: productCreate.product,
     };
 
-    return NextResponse.json(response);
+    return NextResponse.json(response, { status: 200 });
   } catch (error) {
     console.error('Unexpected error in products endpoint', error);
     return NextResponse.json(
