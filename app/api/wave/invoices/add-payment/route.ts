@@ -71,17 +71,19 @@ interface InvoiceNode {
 interface AddPaymentMutationResult {
   invoicePaymentCreate: {
     didSucceed: boolean;
-    inputErrors: Array<{ message: string; path?: string[]; code?: string }>;
+    inputErrors: Array<{ message: string; path?: string[]; code?: string }> | null;
     payment: {
       id: string;
-      amount: { amount: number; currency: { code: string } | null };
       createdAt: string;
       notes: string | null;
       paymentMethod: string | null;
-      invoice: InvoiceNode;
+      invoice: {
+        id: string;
+      };
     } | null;
   } | null;
 }
+
 
 const FIND_INVOICE_BY_ID_QUERY = /* GraphQL */ `
   query InvoiceById($businessId: ID!, $invoiceId: ID!) {
@@ -164,44 +166,17 @@ const ADD_PAYMENT_MUTATION = /* GraphQL */ `
       }
       payment {
         id
-        amount {
-          amount
-          currency {
-            code
-          }
-        }
         createdAt
         notes
         paymentMethod
         invoice {
           id
-          invoiceNumber
-          status
-          createdAt
-          dueDate
-          total {
-            amount
-            currency {
-              code
-            }
-          }
-          amountDue {
-            amount
-            currency {
-              code
-            }
-          }
-          customer {
-            id
-            name
-            email
-          }
-          publicUrl
         }
       }
     }
   }
 `;
+
 
 function unauthorized() {
   return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -331,11 +306,10 @@ export async function POST(req: NextRequest) {
       ...(body.notes ? { notes: body.notes } : {}),
     };
 
-    const mutationResult = await waveGraphQLFetch<AddPaymentMutationResult>(
+       const mutationResult = await waveGraphQLFetch<AddPaymentMutationResult>(
       ADD_PAYMENT_MUTATION,
       { input: mutationInput }
     );
-
 
     const payload = mutationResult.invoicePaymentCreate;
 
@@ -348,16 +322,39 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // 1) Reconstruimos el objeto payment usando lo que sabemos
     const payment: InvoicePaymentInfo = {
       id: payload.payment.id,
-      amount: Number(payload.payment.amount.amount),
-      currency: payload.payment.amount.currency?.code ?? '',
+      amount: body.amount as number, // ya sabemos cuánto pagaste
+      // tomaremos la moneda luego del invoice actualizado
+      currency: '',
       createdAt: payload.payment.createdAt,
       paymentMethod: payload.payment.paymentMethod,
       notes: payload.payment.notes ?? null,
     };
 
-    const invoice = mapInvoiceNode(payload.payment.invoice);
+    // 2) Volvemos a leer el invoice actualizado usando la query que ya funciona
+    const updatedInvoiceData = await waveGraphQLFetch<InvoiceLookupResult>(
+      FIND_INVOICE_BY_ID_QUERY,
+      {
+        businessId,
+        invoiceId: payload.payment.invoice.id,
+      }
+    );
+
+    const updatedInvoiceNode = updatedInvoiceData.business?.invoice;
+    if (!updatedInvoiceNode) {
+      console.error('Payment created but failed to refetch updated invoice', updatedInvoiceData);
+      return NextResponse.json(
+        { error: 'Payment created but failed to refetch updated invoice' },
+        { status: 500 }
+      );
+    }
+
+    const invoice = mapInvoiceNode(updatedInvoiceNode);
+
+    // ahora sí podemos rellenar la currency del payment
+    payment.currency = invoice.totalCurrency || 'USD';
 
     const responseBody: AddPaymentResponseBody = {
       businessKey: body.businessKey as BusinessKey,
@@ -367,6 +364,7 @@ export async function POST(req: NextRequest) {
     };
 
     return NextResponse.json(responseBody, { status: 200 });
+
   } catch (error) {
     console.error('Unexpected error while adding payment to invoice in Wave', error);
     return NextResponse.json(
