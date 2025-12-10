@@ -141,7 +141,6 @@ export async function POST(req: NextRequest) {
     }
 
     const input = {
-      businessId,
       invoiceId: body.invoiceId,
     };
 
