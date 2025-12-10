@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { waveGraphQLFetch } from '../../../../../lib/waveClient';
 import { BusinessKey, getBusinessIdFromKey } from '../../../../../lib/businessSelector';
+import { getWavePaymentConfig } from '../../../../../lib/wavePaymentConfig';
 
 interface AddPaymentRequestBody {
   businessKey?: BusinessKey;
@@ -8,6 +9,8 @@ interface AddPaymentRequestBody {
   invoiceNumber?: string;
   amount?: number;
   paymentDate?: string;
+  paymentMethod?: string;
+  notes?: string;
 }
 
 interface InvoiceLookupResult {
@@ -35,26 +38,19 @@ interface MoneyTransactionCreateResult {
   moneyTransactionCreate: {
     didSucceed: boolean;
     inputErrors: Array<{ message: string; path?: string[]; code?: string }> | null;
-    moneyTransaction: {
+    transaction: {
       id: string;
-      date: string;
-      description: string | null;
-      externalId: string | null;
-      anchor: {
-        amount: { value: number };
-        direction: string;
-      };
     } | null;
   } | null;
 }
 
-interface PaymentRecord {
+interface InvoicePaymentInfo {
   id: string;
   amount: number;
   currency: string;
-  date: string;
-  description: string | null;
-  externalId: string | null;
+  createdAt: string;
+  paymentMethod: string;
+  notes: string | null;
 }
 
 interface UpdatedInvoiceInfo {
@@ -73,7 +69,7 @@ interface UpdatedInvoiceInfo {
 interface AddPaymentResponseBody {
   businessKey: BusinessKey;
   businessId: string;
-  payment: PaymentRecord;
+  payment: InvoicePaymentInfo;
   invoice: UpdatedInvoiceInfo;
 }
 
@@ -148,7 +144,7 @@ const FIND_INVOICE_BY_NUMBER_QUERY = /* GraphQL */ `
 `;
 
 const MONEY_TRANSACTION_CREATE_MUTATION = /* GraphQL */ `
-  mutation AddInvoicePayment($input: MoneyTransactionCreateInput!) {
+  mutation MoneyTransactionCreate($input: MoneyTransactionCreateInput!) {
     moneyTransactionCreate(input: $input) {
       didSucceed
       inputErrors {
@@ -156,17 +152,8 @@ const MONEY_TRANSACTION_CREATE_MUTATION = /* GraphQL */ `
         path
         code
       }
-      moneyTransaction {
+      transaction {
         id
-        date
-        description
-        externalId
-        anchor {
-          amount {
-            value
-          }
-          direction
-        }
       }
     }
   }
@@ -304,12 +291,12 @@ export async function POST(req: NextRequest) {
 
   let businessId: string;
   let anchorAccountId: string;
-  let incomeAccountId: string;
+  let salesAccountId: string;
   try {
     businessId = getBusinessIdFromKey(body.businessKey as BusinessKey);
-    const accountIds = getAccountIdsFromKey(body.businessKey as BusinessKey);
-    anchorAccountId = accountIds.anchorAccountId;
-    incomeAccountId = accountIds.incomeAccountId;
+    const config = getWavePaymentConfig(body.businessKey as BusinessKey);
+    anchorAccountId = config.anchorAccountId;
+    salesAccountId = config.salesAccountId;
   } catch (error) {
     console.error('Missing business configuration', error);
     return NextResponse.json({ error: 'Invalid or missing business configuration' }, { status: 400 });
@@ -325,11 +312,13 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Invoice not found' }, { status: 404 });
     }
 
+    const externalId = `invoice:${invoiceNode.invoiceNumber ?? invoiceNode.id}`;
     const mutationInput = {
       businessId,
-      externalId: `invoice:${invoiceNode.id}`,
+      externalId,
       date: paymentDate,
-      description: 'Invoice Payment',
+      description:
+        body.notes ?? `Payment for invoice #${(invoiceNode.invoiceNumber ?? '').trim()}`.trim(),
       anchor: {
         accountId: anchorAccountId,
         amount,
@@ -337,7 +326,7 @@ export async function POST(req: NextRequest) {
       },
       lineItems: [
         {
-          accountId: incomeAccountId,
+          accountId: salesAccountId,
           amount,
           balance: 'INCREASE',
         },
@@ -351,7 +340,7 @@ export async function POST(req: NextRequest) {
 
     const payload = mutationResult.moneyTransactionCreate;
 
-    if (!payload?.didSucceed || !payload.moneyTransaction) {
+    if (!payload?.didSucceed || !payload.transaction) {
       const details = payload?.inputErrors?.map((err) => err.message) ?? ['Unknown error'];
       console.error('Failed to register payment in Wave', payload?.inputErrors);
       return NextResponse.json(
@@ -376,13 +365,13 @@ export async function POST(req: NextRequest) {
 
     const invoice = mapInvoiceNode(updatedInvoiceNode);
 
-    const payment: PaymentRecord = {
-      id: payload.moneyTransaction.id,
+    const payment: InvoicePaymentInfo = {
+      id: payload.transaction.id,
       amount,
       currency: invoice.totalCurrency || 'USD',
-      date: payload.moneyTransaction.date,
-      description: payload.moneyTransaction.description,
-      externalId: payload.moneyTransaction.externalId,
+      createdAt: paymentDate,
+      paymentMethod: body.paymentMethod ?? 'CASH',
+      notes: body.notes ?? null,
     };
 
     const responseBody: AddPaymentResponseBody = {
