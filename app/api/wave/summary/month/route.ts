@@ -24,8 +24,8 @@ interface MonthlySummaryQueryResult {
           dueDate: string | null;
           status: string;
           invoiceNumber: string | null;
-          total: { amount: number; currency: { code: string } | null } | null;
-          amountDue: { amount: number; currency: { code: string } | null } | null;
+          total: { value: number; currency: { code: string } | null } | null;
+          amountDue: { value: number; currency: { code: string } | null } | null;
         };
       }>;
     } | null;
@@ -74,8 +74,8 @@ const MONTHLY_SUMMARY_QUERY = /* GraphQL */ `
       invoices(
         page: $page
         pageSize: $pageSize
-        createdAtStart: $startDate
-        createdAtEnd: $endDate
+        invoiceDateStart: $startDate
+        invoiceDateEnd: $endDate
       ) {
         pageInfo {
           currentPage
@@ -90,13 +90,13 @@ const MONTHLY_SUMMARY_QUERY = /* GraphQL */ `
             status
             invoiceNumber
             total {
-              amount
+              value
               currency {
                 code
               }
             }
             amountDue {
-              amount
+              value
               currency {
                 code
               }
@@ -212,8 +212,8 @@ export async function POST(req: NextRequest) {
     let currency: string | null = null;
 
     edges.forEach(({ node }) => {
-      const totalAmount = node.total?.amount ?? 0;
-      const amountDue = node.amountDue?.amount ?? 0;
+      const totalAmount = node.total?.value ?? 0;
+      const amountDue = node.amountDue?.value ?? 0;
       const paidAmount = totalAmount - amountDue;
 
       totals.totalInvoiced += totalAmount;
@@ -262,8 +262,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(response, { status: 200 });
   } catch (error) {
     console.error('Failed to fetch monthly invoices from Wave', error);
+    const details = error instanceof Error ? error.message : undefined;
     return NextResponse.json(
-      { error: 'Failed to fetch monthly invoices from Wave' },
+      { error: 'Failed to fetch monthly invoices from Wave', details },
       { status: 500 }
     );
   }
