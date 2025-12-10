@@ -1,0 +1,522 @@
+openapi: 3.1.0
+info:
+  title: Wave Billing GPT Backend
+  version: "0.1.0"
+  description: |
+    Backend for Wave + Custom GPT integrations. All business-facing endpoints are
+    protected by an internal header `x-internal-secret` and communicate with Wave's
+    GraphQL API. Use these endpoints as OpenAI Actions.
+servers:
+  - url: https://wave-billing-gpt-backend.vercel.app
+    description: Production server (replace with real Vercel URL)
+security:
+  - InternalApiKey: []
+components:
+  securitySchemes:
+    InternalApiKey:
+      type: apiKey
+      in: header
+      name: x-internal-secret
+  schemas:
+    BusinessKey:
+      type: string
+      enum: [manna, bako, socialion]
+      description: Logical business identifier mapped to Wave business IDs.
+    InvoiceStatus:
+      type: string
+      enum: [DRAFT, APPROVED, SENT, PAID, OVERDUE]
+    PaymentMethod:
+      type: string
+      enum: [CASH, ZELLE, BANK_TRANSFER, CARD]
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+        details:
+          type: array
+          items:
+            type: string
+      required: [error]
+    HealthResponse:
+      type: object
+      properties:
+        ok:
+          type: boolean
+        service:
+          type: string
+        version:
+          type: string
+      required: [ok, service, version]
+    ListInvoicesRequestBody:
+      type: object
+      properties:
+        businessKey:
+          $ref: '#/components/schemas/BusinessKey'
+        status:
+          $ref: '#/components/schemas/InvoiceStatus'
+        customerSearch:
+          type: string
+          description: Partial customer name search term.
+        fromDate:
+          type: string
+          format: date
+        toDate:
+          type: string
+          format: date
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 20
+      required: [businessKey]
+    InvoiceListItem:
+      type: object
+      properties:
+        id:
+          type: string
+        invoiceNumber:
+          type: string
+          nullable: true
+        status:
+          type: string
+        createdAt:
+          type: string
+        dueDate:
+          type: string
+          nullable: true
+        totalAmount:
+          type: number
+        totalCurrency:
+          type: string
+        amountDue:
+          type: number
+        customerName:
+          type: string
+          nullable: true
+      required: [id, status, createdAt, totalAmount, totalCurrency, amountDue]
+    ListInvoicesResponseBody:
+      type: object
+      properties:
+        businessKey:
+          $ref: '#/components/schemas/BusinessKey'
+        businessId:
+          type: string
+        pageInfo:
+          type: object
+          properties:
+            currentPage:
+              type: integer
+            totalPages:
+              type: integer
+            totalCount:
+              type: integer
+          required: [currentPage, totalPages, totalCount]
+        invoices:
+          type: array
+          items:
+            $ref: '#/components/schemas/InvoiceListItem'
+      required: [businessKey, businessId, pageInfo, invoices]
+    CreateInvoiceItemInput:
+      type: object
+      properties:
+        description:
+          type: string
+        unitPrice:
+          type: number
+        quantity:
+          type: number
+      required: [description, unitPrice, quantity]
+    CreateInvoiceCustomerInput:
+      type: object
+      properties:
+        name:
+          type: string
+        email:
+          type: string
+          format: email
+      required: [name]
+    CreateInvoiceRequestBody:
+      type: object
+      properties:
+        businessKey:
+          $ref: '#/components/schemas/BusinessKey'
+        customer:
+          $ref: '#/components/schemas/CreateInvoiceCustomerInput'
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/CreateInvoiceItemInput'
+          minItems: 1
+        invoiceDate:
+          type: string
+          format: date
+        dueDate:
+          type: string
+          format: date
+        currencyCode:
+          type: string
+          default: USD
+        notes:
+          type: string
+      required: [businessKey, customer, items]
+    CreatedInvoiceCustomer:
+      type: object
+      properties:
+        id:
+          type: string
+          nullable: true
+        name:
+          type: string
+          nullable: true
+        email:
+          type: string
+          nullable: true
+      required: [id, name, email]
+    CreatedInvoicePayload:
+      type: object
+      properties:
+        id:
+          type: string
+        invoiceNumber:
+          type: string
+          nullable: true
+        status:
+          type: string
+        createdAt:
+          type: string
+        dueDate:
+          type: string
+          nullable: true
+        totalAmount:
+          type: number
+        totalCurrency:
+          type: string
+        amountDue:
+          type: number
+        customer:
+          $ref: '#/components/schemas/CreatedInvoiceCustomer'
+        publicUrl:
+          type: string
+          nullable: true
+      required: [id, status, createdAt, totalAmount, totalCurrency, amountDue, customer]
+    CreatedInvoiceResponseBody:
+      type: object
+      properties:
+        businessKey:
+          $ref: '#/components/schemas/BusinessKey'
+        businessId:
+          type: string
+        invoice:
+          $ref: '#/components/schemas/CreatedInvoicePayload'
+      required: [businessKey, businessId, invoice]
+    AddPaymentRequestBody:
+      type: object
+      properties:
+        businessKey:
+          $ref: '#/components/schemas/BusinessKey'
+        invoiceId:
+          type: string
+        invoiceNumber:
+          type: string
+        amount:
+          type: number
+          exclusiveMinimum: 0
+        paymentDate:
+          type: string
+          format: date
+        paymentMethod:
+          $ref: '#/components/schemas/PaymentMethod'
+        notes:
+          type: string
+      required: [businessKey, amount]
+    InvoiceCustomerInfo:
+      type: object
+      properties:
+        id:
+          type: string
+          nullable: true
+        name:
+          type: string
+          nullable: true
+        email:
+          type: string
+          nullable: true
+      required: [id, name, email]
+    InvoicePaymentInfo:
+      type: object
+      properties:
+        id:
+          type: string
+        amount:
+          type: number
+        currency:
+          type: string
+        createdAt:
+          type: string
+        paymentMethod:
+          type: string
+          nullable: true
+        notes:
+          type: string
+          nullable: true
+      required: [id, amount, currency, createdAt]
+    UpdatedInvoiceInfo:
+      type: object
+      properties:
+        id:
+          type: string
+        invoiceNumber:
+          type: string
+          nullable: true
+        status:
+          type: string
+        createdAt:
+          type: string
+        dueDate:
+          type: string
+          nullable: true
+        totalAmount:
+          type: number
+        totalCurrency:
+          type: string
+        amountDue:
+          type: number
+        customer:
+          $ref: '#/components/schemas/InvoiceCustomerInfo'
+        publicUrl:
+          type: string
+          nullable: true
+      required: [id, status, createdAt, totalAmount, totalCurrency, amountDue, customer]
+    AddPaymentResponseBody:
+      type: object
+      properties:
+        businessKey:
+          $ref: '#/components/schemas/BusinessKey'
+        businessId:
+          type: string
+        payment:
+          $ref: '#/components/schemas/InvoicePaymentInfo'
+        invoice:
+          $ref: '#/components/schemas/UpdatedInvoiceInfo'
+      required: [businessKey, businessId, payment, invoice]
+    MonthlySummaryRequestBody:
+      type: object
+      properties:
+        businessKey:
+          $ref: '#/components/schemas/BusinessKey'
+        year:
+          type: integer
+        month:
+          type: integer
+          minimum: 1
+          maximum: 12
+      required: [businessKey, year, month]
+    MonthlySummaryTotals:
+      type: object
+      properties:
+        totalInvoiced:
+          type: number
+        totalPaid:
+          type: number
+        totalOutstanding:
+          type: number
+      required: [totalInvoiced, totalPaid, totalOutstanding]
+    MonthlySummaryCounts:
+      type: object
+      properties:
+        totalInvoices:
+          type: integer
+        draftCount:
+          type: integer
+        approvedCount:
+          type: integer
+        sentCount:
+          type: integer
+        paidCount:
+          type: integer
+        overdueCount:
+          type: integer
+      required: [totalInvoices, draftCount, approvedCount, sentCount, paidCount, overdueCount]
+    MonthlySummaryResponseBody:
+      type: object
+      properties:
+        businessKey:
+          $ref: '#/components/schemas/BusinessKey'
+        businessId:
+          type: string
+        year:
+          type: integer
+        month:
+          type: integer
+        period:
+          type: object
+          properties:
+            startDate:
+              type: string
+            endDate:
+              type: string
+          required: [startDate, endDate]
+        totals:
+          $ref: '#/components/schemas/MonthlySummaryTotals'
+        counts:
+          $ref: '#/components/schemas/MonthlySummaryCounts'
+        currency:
+          type: string
+          nullable: true
+      required: [businessKey, businessId, year, month, period, totals, counts, currency]
+paths:
+  /api/health:
+    get:
+      summary: Health check
+      description: Simple diagnostic endpoint to verify backend availability.
+      security: []
+      responses:
+        '200':
+          description: Backend is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+  /api/wave/invoices/list:
+    post:
+      summary: List invoices for a business with optional filters
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ListInvoicesRequestBody'
+      responses:
+        '200':
+          description: List of invoices
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListInvoicesResponseBody'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Wave fetch failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/wave/invoices/create:
+    post:
+      summary: Create a new invoice in Wave
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateInvoiceRequestBody'
+      responses:
+        '200':
+          description: Invoice created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreatedInvoiceResponseBody'
+        '400':
+          description: Validation or Wave input error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Unexpected creation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/wave/invoices/add-payment:
+    post:
+      summary: Register a payment on an existing invoice
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddPaymentRequestBody'
+      responses:
+        '200':
+          description: Payment recorded and invoice updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AddPaymentResponseBody'
+        '400':
+          description: Validation or Wave input error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Invoice not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Unexpected payment error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/wave/summary/month:
+    post:
+      summary: Monthly invoice summary for a business
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MonthlySummaryRequestBody'
+      responses:
+        '200':
+          description: Monthly summary computed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MonthlySummaryResponseBody'
+        '400':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Wave fetch failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
