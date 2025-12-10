@@ -370,7 +370,10 @@ export async function POST(req: NextRequest) {
   } catch (error) {
     console.error('Unexpected error while adding payment to invoice in Wave', error);
     return NextResponse.json(
-      { error: 'Unexpected error while adding payment to invoice in Wave' },
+      {
+        error: 'Unexpected error while adding payment to invoice in Wave',
+        details: error instanceof Error ? error.message : String(error),
+      },
       { status: 500 }
     );
   }
