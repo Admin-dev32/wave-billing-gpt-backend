@@ -4,34 +4,9 @@ import { BusinessKey, getBusinessIdFromKey } from '../../../../../lib/businessSe
 
 interface ListInvoicesRequestBody {
   businessKey?: BusinessKey;
-  status?: 'DRAFT' | 'APPROVED' | 'SENT' | 'PAID' | 'OVERDUE';
-  customerSearch?: string;
-  fromDate?: string;
-  toDate?: string;
-  limit?: number;
-}
-
-interface InvoiceListItem {
-  id: string;
-  invoiceNumber: string | null;
-  status: string;
-  createdAt: string;
-  dueDate: string | null;
-  totalAmount: number;
-  totalCurrency: string;
-  amountDue: number;
-  customerName: string | null;
-}
-
-interface ListInvoicesResponseBody {
-  businessKey: BusinessKey;
-  businessId: string;
-  pageInfo: {
-    currentPage: number;
-    totalPages: number;
-    totalCount: number;
-  };
-  invoices: InvoiceListItem[];
+  status?: string;
+  page?: number;
+  pageSize?: number;
 }
 
 interface ListInvoicesQueryResult {
@@ -47,20 +22,32 @@ interface ListInvoicesQueryResult {
         node: {
           id: string;
           createdAt: string;
-          dueDate: string | null;
+          modifiedAt: string;
           status: string;
           invoiceNumber: string | null;
-          total: {
-            amount: number;
-            currency: { code: string } | null;
-          } | null;
-          amountDue: {
-            amount: number;
-            currency: { code: string } | null;
-          } | null;
+          invoiceDate: string | null;
+          dueDate: string | null;
+          viewUrl: string | null;
           customer: {
             id: string;
-            name: string | null;
+            name: string;
+          } | null;
+          currency: {
+            code: string;
+          } | null;
+          total: {
+            value: number;
+            currency: {
+              code: string;
+              symbol: string;
+            } | null;
+          } | null;
+          amountDue: {
+            value: number;
+            currency: {
+              code: string;
+              symbol: string;
+            } | null;
           } | null;
         };
       }>;
@@ -68,26 +55,34 @@ interface ListInvoicesQueryResult {
   } | null;
 }
 
+interface InvoiceListItem {
+  id: string;
+  invoiceNumber: string | null;
+  status: string;
+  invoiceDate: string | null;
+  dueDate: string | null;
+  total: number;
+  amountDue: number;
+  currency: string | null;
+  customerName: string | null;
+  viewUrl: string | null;
+}
+
+interface ListInvoicesResponseBody {
+  businessKey: BusinessKey;
+  businessId: string;
+  page: number;
+  pageSize: number;
+  totalCount: number;
+  totalPages: number;
+  invoices: InvoiceListItem[];
+}
+
 const LIST_INVOICES_QUERY = /* GraphQL */ `
-  query ListInvoices(
-    $businessId: ID!
-    $page: Int
-    $pageSize: Int
-    $status: InvoiceStatus
-    $customerSearch: String
-    $startDate: Date
-    $endDate: Date
-  ) {
+  query ListInvoices($businessId: ID!, $page: Int!, $pageSize: Int!, $status: InvoiceStatus) {
     business(id: $businessId) {
       id
-      invoices(
-        page: $page
-        pageSize: $pageSize
-        status: $status
-        customerSearch: $customerSearch
-        createdAtStart: $startDate
-        createdAtEnd: $endDate
-      ) {
+      invoices(page: $page, pageSize: $pageSize, status: $status) {
         pageInfo {
           currentPage
           totalPages
@@ -97,24 +92,32 @@ const LIST_INVOICES_QUERY = /* GraphQL */ `
           node {
             id
             createdAt
-            dueDate
+            modifiedAt
             status
             invoiceNumber
+            invoiceDate
+            dueDate
+            viewUrl
+            customer {
+              id
+              name
+            }
+            currency {
+              code
+            }
             total {
-              amount
+              value
               currency {
+                symbol
                 code
               }
             }
             amountDue {
-              amount
+              value
               currency {
+                symbol
                 code
               }
-            }
-            customer {
-              id
-              name
             }
           }
         }
@@ -128,7 +131,7 @@ function unauthorized() {
 }
 
 /**
- * Lists invoices from Wave for a given business, applying optional filters like status and dates.
+ * Lists invoices from Wave for a given business with optional status filtering and pagination.
  */
 export async function POST(req: NextRequest) {
   if (req.method !== 'POST') {
@@ -151,73 +154,87 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
 
-  const { businessKey, status, customerSearch, fromDate, toDate } = body;
+  const { businessKey, status } = body;
   const validKeys: BusinessKey[] = ['manna', 'bako', 'socialion'];
 
   if (!businessKey || !validKeys.includes(businessKey)) {
-    return NextResponse.json({ error: 'Invalid or missing businessKey' }, { status: 400 });
+    return NextResponse.json({ error: 'Invalid businessKey' }, { status: 400 });
   }
 
-  const limitFromBody = typeof body.limit === 'number' ? body.limit : undefined;
-  const pageSize = Math.min(Math.max(limitFromBody ?? 20, 1), 100);
+  const page = typeof body.page === 'number' ? body.page : 1;
+  const pageSize = typeof body.pageSize === 'number' ? body.pageSize : 50;
+
+  if (page < 1 || pageSize < 1) {
+    return NextResponse.json({ error: 'page and pageSize must be greater than or equal to 1' }, { status: 400 });
+  }
 
   let businessId: string;
   try {
     businessId = getBusinessIdFromKey(businessKey);
   } catch (error) {
-    console.error('Missing business ID environment variable', error);
-    return NextResponse.json({ error: 'Failed to fetch invoices from Wave' }, { status: 500 });
+    console.error('Invalid business key or missing environment variable', error);
+    return NextResponse.json({ error: 'Invalid businessKey' }, { status: 400 });
   }
 
   const variables = {
     businessId,
-    page: 1,
+    page,
     pageSize,
-    status,
-    customerSearch: customerSearch || undefined,
-    startDate: fromDate || undefined,
-    endDate: toDate || undefined,
+    status: status ? status : undefined,
   };
 
   try {
     const data = await waveGraphQLFetch<ListInvoicesQueryResult>(LIST_INVOICES_QUERY, variables);
-    const invoicesData = data.business?.invoices;
 
-    if (!invoicesData) {
-      return NextResponse.json(
-        { error: 'Failed to fetch invoices from Wave' },
-        { status: 500 }
-      );
+    const business = data.business;
+    if (!business) {
+      return NextResponse.json({ error: 'Invalid businessKey' }, { status: 400 });
     }
 
-    const pageInfo = invoicesData.pageInfo;
+    const invoicesData = business.invoices;
+    if (!invoicesData) {
+      const emptyResponse: ListInvoicesResponseBody = {
+        businessKey,
+        businessId,
+        page,
+        pageSize,
+        totalCount: 0,
+        totalPages: 0,
+        invoices: [],
+      };
+      return NextResponse.json(emptyResponse, { status: 200 });
+    }
 
     const invoices: InvoiceListItem[] = invoicesData.edges.map(({ node }) => ({
       id: node.id,
       invoiceNumber: node.invoiceNumber ?? null,
       status: node.status,
-      createdAt: node.createdAt,
+      invoiceDate: node.invoiceDate ?? null,
       dueDate: node.dueDate ?? null,
-      totalAmount: Number(node.total?.amount ?? 0),
-      totalCurrency: node.total?.currency?.code ?? '',
-      amountDue: Number(node.amountDue?.amount ?? 0),
+      total: node.total?.value ?? 0,
+      amountDue: node.amountDue?.value ?? 0,
+      currency: node.currency?.code ?? node.total?.currency?.code ?? null,
       customerName: node.customer?.name ?? null,
+      viewUrl: node.viewUrl ?? null,
     }));
 
     const responseBody: ListInvoicesResponseBody = {
       businessKey,
       businessId,
-      pageInfo: {
-        currentPage: pageInfo.currentPage,
-        totalPages: pageInfo.totalPages,
-        totalCount: pageInfo.totalCount,
-      },
+      page,
+      pageSize,
+      totalCount: invoicesData.pageInfo.totalCount,
+      totalPages: invoicesData.pageInfo.totalPages,
       invoices,
     };
 
     return NextResponse.json(responseBody, { status: 200 });
   } catch (error) {
     console.error('Failed to fetch invoices from Wave', error);
-    return NextResponse.json({ error: 'Failed to fetch invoices from Wave' }, { status: 500 });
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    return NextResponse.json(
+      { error: 'Failed to fetch invoices from Wave', details: message },
+      { status: 500 }
+    );
   }
 }
