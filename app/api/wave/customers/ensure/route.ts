@@ -26,7 +26,7 @@ interface ListCustomersQueryResult {
           id: string;
           name: string;
           email: string | null;
-          phone: { number: string | null } | null;
+          phone: string | null;
         };
       }>;
     } | null;
@@ -45,7 +45,7 @@ interface CustomerCreateResult {
       id: string;
       name: string;
       email: string | null;
-      phone: { number: string | null } | null;
+      phone: string | null;
     } | null;
   } | null;
 }
@@ -77,9 +77,7 @@ const LIST_CUSTOMERS_QUERY = /* GraphQL */ `
             id
             name
             email
-            phone {
-              number
-            }
+            phone
           }
         }
       }
@@ -100,9 +98,7 @@ const CUSTOMER_CREATE_MUTATION = /* GraphQL */ `
         id
         name
         email
-        phone {
-          number
-        }
+        phone
       }
     }
   }
@@ -147,7 +143,10 @@ export async function POST(req: NextRequest) {
   const phoneInput = normalizeString(body.phone);
 
   if (!nameInput && !emailInput) {
-    return NextResponse.json({ error: 'Either name or email must be provided' }, { status: 400 });
+    return NextResponse.json(
+      { error: 'Either name or email must be provided' },
+      { status: 400 }
+    );
   }
 
   let businessId: string;
@@ -161,7 +160,10 @@ export async function POST(req: NextRequest) {
   const listVariables = { businessId, page: 1, pageSize: 200 };
 
   try {
-    const listData = await waveGraphQLFetch<ListCustomersQueryResult>(LIST_CUSTOMERS_QUERY, listVariables);
+    const listData = await waveGraphQLFetch<ListCustomersQueryResult>(
+      LIST_CUSTOMERS_QUERY,
+      listVariables
+    );
     const customersData = listData.business?.customers;
 
     if (!customersData) {
@@ -177,7 +179,7 @@ export async function POST(req: NextRequest) {
       id: node.id,
       name: node.name,
       email: node.email ?? null,
-      phone: node.phone?.number ?? null,
+      phone: node.phone ?? null,
     }));
 
     const normalizedEmail = emailInput.toLowerCase();
@@ -214,7 +216,12 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(response, { status: 200 });
     }
 
-    const createInput: { businessId: string; name: string; email?: string | null; phone?: { number: string } } = {
+    const createInput: {
+      businessId: string;
+      name: string;
+      email?: string | null;
+      phone?: string | null;
+    } = {
       businessId,
       name: nameInput || emailInput,
     };
@@ -224,7 +231,7 @@ export async function POST(req: NextRequest) {
     }
 
     if (phoneInput) {
-      createInput.phone = { number: phoneInput };
+      createInput.phone = phoneInput;
     }
 
     const createResult = await waveGraphQLFetch<CustomerCreateResult>(
@@ -252,7 +259,7 @@ export async function POST(req: NextRequest) {
         id: customer.id,
         name: customer.name,
         email: customer.email ?? null,
-        phone: customer.phone?.number ?? null,
+        phone: customer.phone ?? null,
       },
     };
 
