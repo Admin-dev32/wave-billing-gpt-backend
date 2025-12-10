@@ -19,14 +19,14 @@ interface CreateInvoiceRequestBody {
 }
 
 interface InvoiceCreateResult {
-  invoiceCreate: {
+  invoiceCreate?: {
     didSucceed: boolean;
-    inputErrors: Array<{
+    inputErrors?: Array<{
       code: string;
       message: string;
       path: string[];
     }>;
-    invoice: {
+    invoice?: {
       id: string;
       invoiceNumber: string | null;
       status: string;
@@ -129,7 +129,10 @@ function getGenericProductId(key: BusinessKey): string {
   return value;
 }
 
-function validateRequestBody(body: CreateInvoiceRequestBody): asserts body is Required<CreateInvoiceRequestBody> {
+function validateRequestBody(
+  body: CreateInvoiceRequestBody,
+  items: CreateInvoiceItemInput[]
+): asserts body is CreateInvoiceRequestBody & { businessKey: BusinessKey; customerId: string } {
   const validKeys: BusinessKey[] = ['manna', 'bako', 'socialion'];
 
   if (!body.businessKey || !validKeys.includes(body.businessKey)) {
@@ -140,11 +143,11 @@ function validateRequestBody(body: CreateInvoiceRequestBody): asserts body is Re
     throw new Error('Missing customerId');
   }
 
-  if (!Array.isArray(body.items) || body.items.length === 0) {
+  if (items.length === 0) {
     throw new Error('Missing or invalid items');
   }
 
-  for (const [index, item] of body.items.entries()) {
+  for (const [index, item] of items.entries()) {
     if (typeof item.unitPrice !== 'number' || !Number.isFinite(item.unitPrice) || item.unitPrice <= 0) {
       throw new Error(`Invalid unitPrice for item ${index}`);
     }
@@ -167,67 +170,70 @@ export async function POST(req: NextRequest) {
     return unauthorized();
   }
 
-  let body: CreateInvoiceRequestBody;
   try {
-    body = (await req.json()) as CreateInvoiceRequestBody;
-  } catch (error) {
-    console.error('Invalid JSON body for invoice creation', error);
-    return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
-  }
+    let body: CreateInvoiceRequestBody;
+    try {
+      body = (await req.json()) as CreateInvoiceRequestBody;
+    } catch (error) {
+      console.error('Invalid JSON body for invoice creation', error);
+      return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
+    }
 
-  try {
-    validateRequestBody(body);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Invalid request payload';
-    return NextResponse.json({ error: message }, { status: 400 });
-  }
+    const items = Array.isArray(body.items) ? body.items : [];
 
-  let businessId: string;
-  try {
-    businessId = getBusinessIdFromKey(body.businessKey);
-  } catch (error) {
-    console.error('Invalid business key or missing business ID env var', error);
-    return NextResponse.json({ error: 'Invalid businessKey' }, { status: 400 });
-  }
+    try {
+      validateRequestBody(body, items);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Invalid request payload';
+      return NextResponse.json({ error: message }, { status: 400 });
+    }
 
-  let productId: string;
-  try {
-    productId = getGenericProductId(body.businessKey);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Missing generic product ID';
-    console.error(message);
-    return NextResponse.json({ error: message }, { status: 500 });
-  }
+    let businessId: string;
+    try {
+      businessId = getBusinessIdFromKey(body.businessKey);
+    } catch (error) {
+      console.error('Invalid business key or missing business ID env var', error);
+      return NextResponse.json({ error: 'Invalid businessKey' }, { status: 400 });
+    }
 
-  const { invoiceDate, dueDate } = computeDates(body.invoiceDate, body.dueDate);
-  const currency = body.currency ?? 'USD';
+    let productId: string;
+    try {
+      productId = getGenericProductId(body.businessKey);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Missing generic product ID';
+      console.error(message);
+      return NextResponse.json({ error: message }, { status: 500 });
+    }
 
-  const waveItems = body.items.map((item) => ({
-    productId,
-    description: item.description ?? null,
-    quantity: item.quantity ?? 1,
-    unitPrice: item.unitPrice,
-  }));
+    const { invoiceDate, dueDate } = computeDates(body.invoiceDate, body.dueDate);
+    const currency = body.currency ?? 'USD';
 
-  const input = {
-    businessId,
-    customerId: body.customerId,
-    status: 'DRAFT',
-    currency,
-    invoiceDate,
-    dueDate,
-    items: waveItems,
-    memo: body.memo ?? null,
-  };
+    const waveItems = items.map((item) => ({
+      productId,
+      description: item.description ?? null,
+      quantity: item.quantity ?? 1,
+      unitPrice: item.unitPrice,
+    }));
 
-  try {
+    const input = {
+      businessId,
+      customerId: body.customerId,
+      status: 'DRAFT',
+      currency,
+      invoiceDate,
+      dueDate,
+      items: waveItems,
+      memo: body.memo ?? null,
+    };
+
     const data = await waveGraphQLFetch<InvoiceCreateResult>(CREATE_INVOICE_MUTATION, { input });
     const result = data.invoiceCreate;
+    const inputErrors = result?.inputErrors ?? [];
 
-    if (!result.didSucceed || result.inputErrors.length > 0 || !result.invoice) {
-      console.error('Wave invoiceCreate failed', result.inputErrors);
+    if (!result?.didSucceed || inputErrors.length > 0 || !result.invoice) {
+      console.error('Wave invoiceCreate result', JSON.stringify(result, null, 2));
       return NextResponse.json(
-        { error: 'Wave invoiceCreate failed', inputErrors: result.inputErrors },
+        { error: 'Wave invoiceCreate failed', inputErrors },
         { status: 500 }
       );
     }
