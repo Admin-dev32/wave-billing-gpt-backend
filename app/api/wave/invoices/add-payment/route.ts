@@ -167,6 +167,40 @@ function todayIsoDate(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
+function readEnv(name: string): string {
+  const value = process.env[name];
+
+  if (!value) {
+    throw new Error(`${name} is not set`);
+  }
+
+  return value;
+}
+
+function getAccountIdsFromKey(key: BusinessKey): { anchorAccountId: string; incomeAccountId: string } {
+  switch (key) {
+    case 'manna':
+      return {
+        anchorAccountId: readEnv('WAVE_ANCHOR_ACCOUNT_ID_MANNA'),
+        incomeAccountId: readEnv('WAVE_INCOME_ACCOUNT_ID_MANNA'),
+      };
+    case 'bako':
+      return {
+        anchorAccountId: readEnv('WAVE_ANCHOR_ACCOUNT_ID_BAKO'),
+        incomeAccountId: readEnv('WAVE_INCOME_ACCOUNT_ID_BAKO'),
+      };
+    case 'socialion':
+      return {
+        anchorAccountId: readEnv('WAVE_ANCHOR_ACCOUNT_ID_SOCIALION'),
+        incomeAccountId: readEnv('WAVE_INCOME_ACCOUNT_ID_SOCIALION'),
+      };
+    default: {
+      const exhaustiveCheck: never = key;
+      throw new Error(`Unknown business key: ${exhaustiveCheck}`);
+    }
+  }
+}
+
 function mapInvoiceNode(node: InvoiceNode): UpdatedInvoiceInfo {
   return {
     id: node.id,
