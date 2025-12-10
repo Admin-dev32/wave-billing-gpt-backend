@@ -95,28 +95,16 @@ const FIND_INVOICE_BY_ID_QUERY = /* GraphQL */ `
         status
         createdAt
         dueDate
-        total {
-          amount
-          currency {
-            code
-          }
-        }
-        amountDue {
-          amount
-          currency {
-            code
-          }
-        }
         customer {
           id
           name
           email
         }
-        publicUrl
       }
     }
   }
 `;
+
 
 const FIND_INVOICE_BY_NUMBER_QUERY = /* GraphQL */ `
   query InvoiceByNumber($businessId: ID!, $invoiceNumber: String!) {
@@ -130,30 +118,18 @@ const FIND_INVOICE_BY_NUMBER_QUERY = /* GraphQL */ `
             status
             createdAt
             dueDate
-            total {
-              amount
-              currency {
-                code
-              }
-            }
-            amountDue {
-              amount
-              currency {
-                code
-              }
-            }
             customer {
               id
               name
               email
             }
-            publicUrl
           }
         }
       }
     }
   }
 `;
+
 
 const ADD_PAYMENT_MUTATION = /* GraphQL */ `
   mutation AddInvoicePayment($input: InvoicePaymentCreateInput!) {
